@@ -1,0 +1,10 @@
+### Starting build.
+# Target: cobalt.ml.depends, tags: { bin_annot, debug, extension:ml, file:cobalt.ml, ocaml, ocamldep, package(core), ppx(ppx-jane -as-ppx), quiet, short_paths, thread, traverse }
+ocamlfind ocamldep -package core -ppx 'ppx-jane -as-ppx' -modules cobalt.ml > cobalt.ml.depends
+# Target: cobalt.cmo, tags: { bin_annot, byte, compile, debug, extension:cmo, extension:ml, file:cobalt.cmo, file:cobalt.ml, implem, ocaml, package(core), ppx(ppx-jane -as-ppx), quiet, short_paths, thread, traverse }
+ocamlfind ocamlc -c -w A-4-33-40-41-42-43-34-44 -strict-sequence -g -bin-annot -short-paths -thread -package core -ppx 'ppx-jane -as-ppx' -o cobalt.cmo cobalt.ml
++ ocamlfind ocamlc -c -w A-4-33-40-41-42-43-34-44 -strict-sequence -g -bin-annot -short-paths -thread -package core -ppx 'ppx-jane -as-ppx' -o cobalt.cmo cobalt.ml
+File "cobalt.ml", line 9, characters 10-27:
+Error: Unbound module Cstruct
+Command exited with code 2.
+# Compilation unsuccessful.

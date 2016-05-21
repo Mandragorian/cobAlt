@@ -1,21 +1,27 @@
 OCAMLC=ocamlopt
 OPAMDIR=~/.opam/system/lib/
 OPAMINCLUDES=zarith nocrypto cstruct sexplib ocplib-endian
-DEPS= bigarray sexplib bigstring cstruct zarith nocrypto str
+DEPS= str nocrypto
 SRCML= cobalt.ml
 SRCMLI=
 
-foo: cobalt.ml
-	$(OCAMLC) -o $@ $(addprefix -I $(OPAMDIR), $(OPAMINCLUDES)) $(addsuffix .cmxa, $(DEPS)) $(SRCML)
+cobalt: cobalt.ml
+	ocamlfind ocamlmklib -o $@ -linkpkg  $(addprefix -package , $(DEPS)) $(SRCML)
 
-foo_q: main.ml
-	$(OCAMLC) -o $@ $(addprefix -I $(OPAMDIR), $(OPAMINCLUDES)) $(addsuffix .cmxa, $(DEPS)) main_queue.ml
+test: cobalt.cmi cobalt
+	ocamlfind $(OCAMLC) -linkpkg -package nocrypto -package str cobalt.cmx cobalt_test.ml -o test
 
 %.cmi: %.mli
 	$(OCAMLC) -c $<
 
 clean:
-	rm -rf *.o
-	rm -rf *.cmx
-	rm -rf *.cmi
-	rm -rf *.cmo
+	rm -f *.o
+	rm -f *.cmx
+	rm -f *.cmi
+	rm -f *.cmo
+	rm -f *.a
+	rm -f *.cma
+	rm -f *.cmxa
+
+distclean: clean
+	rm -f test

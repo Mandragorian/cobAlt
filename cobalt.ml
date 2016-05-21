@@ -6,18 +6,19 @@ let find a pred =
     aux a pred 0
 
 
-let inp = Cstruct.of_string "asdf";;
+(*let inp = Cstruct.of_string "asdf";;
 
 let hash = Nocrypto.Hash.SHA512.init() in
 let () = Nocrypto.Hash.SHA512.feed hash inp in
 let cs = Nocrypto.Hash.SHA512.get hash in
 let bcs = Nocrypto.Base64.encode cs in
 let stri = Cstruct.to_string bcs in
-print_endline stri;;
+print_endline stri;;*)
 
 exception Not_implemented of string
 exception Not_request of string
 exception Malformed_message of string
+
 module Message =
     struct
         type id_t = string
@@ -101,6 +102,7 @@ module Message =
         let parents msg =
             msg.parents
     end
+
 module IdMap = Message.IdMap
 module IdSet = Message.IdSet
 
@@ -110,24 +112,34 @@ module CB =
           | Outgoing of Message.id_t
           | LostMsg of Message.id_t
           | RetransmitMsg of Message.id_t
-          | None
+          | No_req
         type t = request
         let create_outgoing id =
           Outgoing id
         let create_lost id =
           LostMsg id
-        let request_serialize = function
-          | Outgoing id -> "O" ^ id
-          | LostMsg id -> "L" ^ id
-          | RetransmitMsg id -> "R" ^ id
-          | None -> raise (Not_request "tried to serialize a None request")
+        let request_serialize r =
+          let encode id = Cstruct.to_string (Nocrypto.Base64.encode (Cstruct.of_string id)) in
+          match r with
+          | Outgoing id -> "O" ^ (encode id)
+          | LostMsg id -> "L" ^ (encode id)
+          | RetransmitMsg id -> "R" ^ (encode id)
+          | No_req -> raise (Not_request "tried to serialize a None request")
         let request_parse r =
+          let decode encoded =
+            let id = (Nocrypto.Base64.decode (Cstruct.of_string encoded)) in
+            match id with
+            | None ->
+              raise (Malformed_message "Badly formed id in message")
+            | Some some_id ->
+              Cstruct.to_string some_id
+          in
           let len = String.length r in
           let id = String.sub r 1 (len - 1) in
           match r.[0] with
-          | 'O' -> Outgoing id
-          | 'L' -> LostMsg id
-          | 'R' -> RetransmitMsg id
+          | 'O' -> Outgoing (decode id)
+          | 'L' -> LostMsg (decode id)
+          | 'R' -> RetransmitMsg (decode id)
           | _ -> raise (Not_request "received request is of unknown request type")
         module RequestSet = Set.Make(struct
           type t = request
@@ -137,15 +149,16 @@ module CB =
               (match y with
                 | Outgoing id_y | LostMsg id_y | RetransmitMsg id_y ->
                     Message.compare_ids id_x id_y
-                | None ->
+                | No_req ->
                     raise (Not_request "tried to compare None request")
               )
-            | None -> raise (Not_request "tried to compare None request")
+            | No_req -> raise (Not_request "tried to compare None request")
         end)
         type state = {
             users : string list;
             me    : string;
             requests_queue : (string * RequestSet.t) array;
+            current_requester : int;
             delivered : Message.t IdMap.t;
             undelivered : Message.t IdMap.t;
             frontier : IdSet.t;
@@ -178,52 +191,29 @@ module CB =
                 users = usrs;
                 me = username;
                 requests_queue = Array.of_list req_list;
+                current_requester = 0;
                 delivered = IdMap.empty;
                 undelivered = IdMap.empty;
                 frontier = IdSet.empty;
                 wire = IdMap.empty;
             } in
             opened
+        (* The following function is only for testing
+         * remove this in "production" *)
+        let how_many_delivered s =
+          IdMap.cardinal s.delivered
+        let how_many_undelivered s =
+          IdMap.cardinal s.undelivered
         let update_wire state w =
-            {
-                users = state.users;
-                me = state.me;
-                requests_queue = state.requests_queue;
-                delivered = state.delivered;
-                undelivered = state.undelivered;
-                frontier = state.frontier;
-                wire = w;
-            }
+          {state with wire = w}
         let update_delivered state d =
-            {
-                users = state.users;
-                me = state.me;
-                requests_queue = state.requests_queue;
-                delivered = d;
-                undelivered = state.undelivered;
-                frontier = state.frontier;
-                wire = state.wire;
-            }
+          {state with delivered = d}
         let update_undelivered state u =
-            {
-                users = state.users;
-                me = state.me;
-                requests_queue = state.requests_queue;
-                delivered = state.delivered;
-                undelivered = u;
-                frontier = state.frontier;
-                wire = state.wire;
-            }
+          {state with undelivered = u}
         let update_frontier state f =
-            {
-                users = state.users;
-                me = state.me;
-                requests_queue = state.requests_queue;
-                delivered = state.delivered;
-                undelivered = state.undelivered;
-                frontier = f;
-                wire = state.wire;
-            }
+          {state with frontier = f}
+        let update_current_requester state cr =
+          {state with current_requester = cr}
         let users us =
             us.users
         let me us =
@@ -238,8 +228,9 @@ module CB =
             us.wire
         let frontier us =
             us.frontier
+        let current_requester us =
+          us.current_requester
         let deliver us msg =
-            (*let (Id str_msg_id) = msg.id in*)
             let new_delivered = IdMap.add (Message.id msg) msg us.delivered in
             let inter_front = IdSet.diff us.frontier (Message.parents msg) in
             let new_front = IdSet.add (Message.id msg) inter_front  in
@@ -339,58 +330,28 @@ module CB =
                   (us, to_send, [who])
                 with Not_found -> (us, "", []))
               | _ -> raise (Not_implemented "this request type is not implemented")
-
+            let schedule us =
+              let cr_r = ref (current_requester us) in
+              let who_r = ref "" in
+              let rqueue_r = ref RequestSet.empty in
+              let request_r : request ref = ref No_req in
+              let stop_while_r = ref false in
+              let () =
+                while not !stop_while_r do
+                  try
+                    let (who, rqueue) = (requests us).(!cr_r) in
+                    request_r := RequestSet.choose rqueue;
+                    who_r := who;
+                    rqueue_r := rqueue;
+                    stop_while_r := true
+                  with Not_found ->
+                    cr_r := (!cr_r + 1) mod (List.length (users us))
+                done
+              in
+              let new_rqueue = RequestSet.remove (!request_r) (!rqueue_r) in
+              let () = us.requests_queue.(!cr_r) <- (!who_r, new_rqueue) in
+              let new_us = {us with current_requester = (!cr_r + 1) mod (List.length (users us))} in
+              (new_us, !who_r, !request_r)
     end
 
-(*
-*)
 
-
-
-
-
-let u1 = CB.init ["ena"; "dio"; "tria"] "ena";;
-let u2 = CB.init ["ena"; "dio"; "tria"] "dio";;
-let u3 = CB.init ["ena"; "dio"; "tria"] "tria";;
-
-let (u1, m1) = CB.broadcast u1 "ti leei";;
-print_endline m1;;
-let u2 = CB.receive u2 "ena" m1;;
-Printf.printf "when only u2 has received the first message from u1\n";;
-Printf.printf "u1 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u1));;
-Printf.printf "u1 delivered num = %d\n" (IdMap.cardinal (CB.delivered u1));;
-Printf.printf "u2 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u2));;
-Printf.printf "u2 delivered num = %d\n" (IdMap.cardinal (CB.delivered u2));;
-Printf.printf "u3 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u3));;
-Printf.printf "u3 delivered num = %d\n" (IdMap.cardinal (CB.delivered u3));;
-let (u1, m2) = CB.broadcast u1 "ti leei";;
-let u2 = CB.receive u2 "ena" m2;;
-
-Printf.printf "when only u2 has received the second message from u1\n";;
-Printf.printf "u1 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u1));;
-Printf.printf "u1 delivered num = %d\n" (IdMap.cardinal (CB.delivered u1));;
-Printf.printf "u2 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u2));;
-Printf.printf "u2 delivered num = %d\n" (IdMap.cardinal (CB.delivered u2));;
-Printf.printf "u3 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u3));;
-Printf.printf "u3 delivered num = %d\n" (IdMap.cardinal (CB.delivered u3));;
-
-
-let u3 = CB.receive u3 "ena" m2;;
-
-Printf.printf "when u3 has received the second message from u1\n";;
-Printf.printf "u1 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u1));;
-Printf.printf "u1 delivered num = %d\n" (IdMap.cardinal (CB.delivered u1));;
-Printf.printf "u2 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u2));;
-Printf.printf "u2 delivered num = %d\n" (IdMap.cardinal (CB.delivered u2));;
-Printf.printf "u3 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u3));;
-Printf.printf "u3 delivered num = %d\n" (IdMap.cardinal (CB.delivered u3));;
-
-let u3 = CB.receive u3 "ena" m1;;
-
-Printf.printf "when only u3 has received the first message from u1\n";;
-Printf.printf "u1 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u1));;
-Printf.printf "u1 delivered num = %d\n" (IdMap.cardinal (CB.delivered u1));;
-Printf.printf "u2 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u2));;
-Printf.printf "u2 delivered num = %d\n" (IdMap.cardinal (CB.delivered u2));;
-Printf.printf "u3 undelivered num = %d\n" (IdMap.cardinal (CB.undelivered u3));;
-Printf.printf "u3 delivered num = %d\n" (IdMap.cardinal (CB.delivered u3));;

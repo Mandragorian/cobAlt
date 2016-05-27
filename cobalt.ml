@@ -119,6 +119,10 @@ module Message =
         (* This function simply returns the message parents *)
         let parents msg =
             msg.parents
+        let author msg =
+          msg.author
+        let payload msg =
+          msg.payload
     end
 
 (* TODO this is probably not a good programming practice.
@@ -197,6 +201,7 @@ module CB =
             undelivered : Message.t IdMap.t;
             frontier : IdSet.t;
             wire : Message.t IdMap.t;
+            on_delivery : string -> string -> unit;
         }
         (* A type encapsulating what the protocol can send. Either a message
          * or a request *)
@@ -225,7 +230,7 @@ module CB =
           | None -> None
         (* This function creates a new user state from the participants username list
          * and the username of our user *)
-        let init usrs username =
+        let init usrs username delivery_cb =
             let req_list = List.map (fun x -> (x, RequestSet.empty)) usrs in
             let opened = {
                 users = usrs;
@@ -236,6 +241,7 @@ module CB =
                 undelivered = IdMap.empty;
                 frontier = IdSet.empty;
                 wire = IdMap.empty;
+                on_delivery = delivery_cb;
             } in
             opened
         (* The following function is only for testing remove this in
@@ -285,6 +291,7 @@ module CB =
             let new_front = IdSet.add (Message.id msg) inter_front  in
             let new_us = update_delivered us new_delivered in
             let new_us = update_frontier new_us new_front in
+            new_us.on_delivery (Message.author msg) (Message.payload msg);
             new_us
         (* This function adds a request in the requst queue *)
         let add_request us auth req =

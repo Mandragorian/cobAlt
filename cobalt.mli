@@ -10,7 +10,7 @@ module CB :
       frontier : IdSet.t;
       wire : Message.t IdMap.t;
     }*)
-    val init : string list -> string -> state
+    val init : string list -> string -> (string -> string -> unit) -> state
     val broadcast : state -> string -> state * string
     val receive : state -> string -> string -> state
     val how_many_delivered : state -> int
